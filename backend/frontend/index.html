@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>KB Chat – streaming voce istantaneo</title>
+<style>
+body      {font-family:Arial,Helvetica,sans-serif;background:#eef2f6;padding:40px}
+#log      {max-width:700px;margin:auto}
+.msg      {background:#fff;border-radius:8px;padding:10px;margin:8px;white-space:pre-wrap}
+.user     {border-left:4px solid #3182ce}
+.ai       {border-left:4px solid #38a169}
+audio     {width:100%;margin-top:4px}
+#prompt   {width:70%}
+button    {padding:6px 14px;margin-left:6px}
+</style>
+</head>
+<body>
+<h2>Chat con KB (voce ElevenLabs – <em>streaming</em>)</h2>
+<div id="log"></div>
+<input id="prompt" placeholder="Scrivi qui…" onkeydown="if(event.key==='Enter')send()">
+<button onclick="send()">Invia</button>
+
+<script>
+const API = "http://127.0.0.1:8002";   //  ← backend su porta 8002
+
+let audioQueue = [];
+let playing    = false;
+
+async function send() {
+  const inp  = document.getElementById("prompt");
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = "";
+
+  addMsg(text, "user");
+
+  const res = await fetch(`${API}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+
+  const reader = res.body.getReader();
+  let full = "", sentence = "", divAI = addMsg("", "ai");
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = new TextDecoder().decode(value);
+
+    full += chunk;
+    divAI.textContent = full;
+
+    sentence += chunk;
+    if (/[.?!]\s*$/.test(sentence)) {
+      enqueue(sentence);
+      sentence = "";
+    }
+  }
+  if (sentence) enqueue(sentence);
+}
+
+function addMsg(t, cls) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  d.textContent = t;
+  document.getElementById("log").appendChild(d);
+  d.scrollIntoView();
+  return d;
+}
+
+// ─────────────── QUEUE AUDIO ───────────────────────────
+function enqueue(sentence) {
+  audioQueue.push(sentence);
+  if (!playing) playNext();
+}
+
+async function playNext() {
+  if (!audioQueue.length) { playing = false; return; }
+  playing = true;
+  const sentence = audioQueue.shift();
+
+  const res = await fetch(`${API}/tts_stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: sentence })
+  });
+
+  const reader = res.body.getReader();
+  const chunks = [];
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const blob  = new Blob(chunks, { type: "audio/mpeg" });
+  const url   = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  audio.onended = () => {
+    URL.revokeObjectURL(url);
+    playNext();
+  };
+  audio.play();
+}
+</script>
+</body>
+</html>
